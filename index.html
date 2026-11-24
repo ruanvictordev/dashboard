@@ -16,6 +16,7 @@
   color-scheme:dark;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none !important}
 html,body{background:var(--bg)}
 body{color:var(--text);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;min-height:100vh}
 button,input,select,textarea{font:inherit;color:inherit}
@@ -273,6 +274,12 @@ dialog h3{font-size:18px;font-weight:600;letter-spacing:-.02em}
   .dlg-actions .btn{flex:1;justify-content:center}
   .dlg-actions .left{flex-basis:100%;order:3;margin:0}
 }
+/* evita o zoom automático do celular ao focar campos (navegadores dão zoom em fontes < 16px) */
+@media (max-width:820px), (pointer:coarse){
+  input,select,textarea{font-size:16px}
+  html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+  dialog{max-height:calc(100dvh - 32px);overflow-y:auto;overscroll-behavior:contain}
+}
 @media (max-width:360px){
   .stats,.stats.s3{grid-template-columns:1fr}
 }
@@ -373,8 +380,9 @@ function openForm({ title, fields, values = {}, onSave, onDelete, saveLabel = 'S
   $('#dlgSave').textContent = saveLabel;
   dlgCtx = { fields, onSave, onDelete };
   $('#dlg').showModal();
+  // no celular não foca automaticamente, para o teclado não abrir sozinho ao abrir o pop-up
   const first = $('#dlgFields').querySelector('input,textarea,select');
-  if (first) first.focus();
+  if (first && matchMedia('(pointer:fine)').matches) first.focus();
 }
 $('#dlgCancel').onclick = () => $('#dlg').close();
 $('#dlgDelete').onclick = () => { if (dlgCtx?.onDelete && dlgCtx.onDelete() !== false) { $('#dlg').close(); save('Excluído'); } };
@@ -876,3 +884,4 @@ render();
 </script>
 </body>
 </html>
+
