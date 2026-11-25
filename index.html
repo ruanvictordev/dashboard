@@ -242,7 +242,7 @@ dialog h3{font-size:18px;font-weight:600;letter-spacing:-.02em}
   .row.job .main{flex:1 1 100%}
   .row.job .amt{margin-right:auto}
   .row .amt{font-size:13px}
-  .bill-day{display:none}
+  .bill-day,.hide-xs{display:none}
 
   /* hábitos: nome em cima, dias embaixo */
   .hab-grid{grid-template-columns:repeat(7,minmax(0,1fr)) 40px 28px;gap:6px 4px}
@@ -341,7 +341,7 @@ const I = {
 
 /* ---------- armazenamento ---------- */
 const KEY = 'painel.v1';
-const defaults = () => ({ name:'', tasks:[], habits:[], goals:[], notes:[], clients:[], jobs:[], tx:[], budgets:{}, bills:[], boxes:[] });
+const defaults = () => ({ name:'', tasks:[], habits:[], goals:[], notes:[], clients:[], jobs:[], tx:[], budgets:{}, bills:[], boxes:[], contracts:[] });
 function load() {
   try { const raw = localStorage.getItem(KEY); if (raw) return Object.assign(defaults(), JSON.parse(raw)); } catch (e) {}
   return defaults();
@@ -470,7 +470,7 @@ function billRow(b, m) {
     <div class="end">${rowBtns('bill', b.id)}</div></div>`;
 }
 function txRow(t) {
-  const link = t.jobId ? 'trabalho' : t.billId ? 'conta fixa' : '';
+  const link = t.jobId ? 'trabalho' : t.billId ? 'conta fixa' : t.contractId ? (t.cmonth ? 'plano mensal' : 'pacote') : '';
   return `<div class="row">
     <div class="main" data-act="tx-edit" data-id="${t.id}"><div class="t">${esc(t.desc || t.category)}</div><div class="sub">${esc(t.category || '')}${link ? ` · <span class="faint">${link}</span>` : ''}</div></div>
     <span class="amt ${t.type}">${brl(t.amount)}</span>
@@ -485,7 +485,9 @@ V.overview = () => {
   const hi = h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
   const { inc, out, bal } = monthTotals(m);
   const pending = S.jobs.filter(j => !j.paid);
-  const receivable = sum(pending, j => j.value);
+  const activeC = S.contracts.filter(cActive);
+  const cDueTotal = sum(S.contracts, cDue);
+  const receivable = sum(pending, j => j.value) + cDueTotal;
   const todayTasks = S.tasks.filter(x => !x.done && (!x.due || x.due <= t))
     .sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999')).slice(0, 7);
   const bills = S.bills.filter(b => !b.paid?.[m]).sort((a, b) => a.dueDay - b.dueDay).slice(0, 5);
@@ -498,7 +500,7 @@ V.overview = () => {
     <div class="stat inv"><span>Saldo de ${parse(m+'-01').toLocaleDateString('pt-BR',{month:'long'})}</span><b>${brl(bal)}</b></div>
     <div class="stat"><span>Entradas</span><b>${brl(inc)}</b></div>
     <div class="stat"><span>Saídas</span><b>${brl(out)}</b></div>
-    <div class="stat"><span>A receber · ${pending.length} job${pending.length === 1 ? '' : 's'}</span><b>${brl(receivable)}</b></div>
+    <div class="stat"><span>A receber · jobs e planos</span><b>${brl(receivable)}</b></div>
   </div>
   <div class="grid g2">
     <section class="card"><h2>Para hoje <a href="#tasks">ver tudo</a></h2>
@@ -509,8 +511,13 @@ V.overview = () => {
     <section class="card"><h2>Contas do mês <a href="#bills">ver tudo</a></h2>
       <div class="list">${bills.map(b => billRow(b, m)).join('') || empty(S.bills.length ? 'Todas as contas do mês estão pagas.' : 'Nenhuma conta fixa cadastrada.')}</div></section>
     <section class="card"><h2>A receber <a href="#jobs">ver tudo</a></h2>
-      <div class="list">${pending.slice(0, 5).map(jobRow).join('') || empty('Nenhum pagamento pendente.')}</div></section>
+      <div class="list">${pending.slice(0, 5).map(jobRow).join('') || empty(cDueTotal ? 'Nenhum job avulso pendente.' : 'Nenhum pagamento pendente.')}</div></section>
   </div>
+  ${activeC.length ? `<section class="card" style="margin-top:16px"><h2>Pacotes e planos <a href="#contracts">ver tudo</a></h2>
+    <div class="list">${activeC.map(c => { const p = cProgress(c); return `<div class="row">
+      <a class="main" href="#contracts"><div class="t">${esc(cName(c))}</div><div class="sub">${CTYPE[c.type]} · ${p.label}</div></a>
+      ${p.quota ? `<div style="flex:0 1 120px" class="hide-xs">${bar(p.done / p.quota * 100, p.done > p.quota)}</div>` : ''}
+      ${cStatus(c)}</div>`; }).join('')}</div></section>` : ''}
   ${goals.length ? `<section style="margin-top:16px"><div class="grid g2">${goals.map(g => `<div class="card gcard"><div class="top"><div><h3>${esc(g.title)}</h3><div class="meta"><span class="tag">${esc(g.area)}</span>${g.deadline ? `<span class="tag dash">até ${fmtD(g.deadline)}</span>` : ''}</div></div><span class="big">${+g.progress || 0}%</span></div>${bar(g.progress, false, true)}</div>`).join('')}</div></section>` : ''}`;
 };
 
@@ -574,12 +581,14 @@ V.notes = () => {
 
 V.clients = () => {
   const rows = S.clients.map(c => {
-    const js = S.jobs.filter(j => j.clientId === c.id);
-    return { c, n: js.length, paid: sum(js.filter(j => j.paid), j => j.value), pend: sum(js.filter(j => !j.paid), j => j.value) };
+    const js = S.jobs.filter(j => j.clientId === c.id), cs = S.contracts.filter(k => k.clientId === c.id);
+    return { c, n: js.length, cs: cs.filter(cActive),
+      paid: sum(js.filter(j => j.paid), j => j.value) + sum(cs, cPaid),
+      pend: sum(js.filter(j => !j.paid), j => j.value) + sum(cs, cDue) };
   }).sort((a, b) => b.paid + b.pend - (a.paid + a.pend));
   return head('Clientes', `${S.clients.length} cadastrado${S.clients.length === 1 ? '' : 's'}`, `<button class="btn primary" data-act="client-add">Novo cliente</button>`) + `
   <div class="card">${rows.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Cliente</th><th>Contato</th><th class="num">Jobs</th><th class="num">Recebido</th><th class="num">Pendente</th><th></th></tr></thead><tbody>
-    ${rows.map(({ c, n, paid, pend }) => `<tr><td class="full"><b style="font-weight:500">${esc(c.name)}</b>${c.notes ? `<div class="faint" style="font-size:12px">${esc(c.notes)}</div>` : ''}</td><td class="muted full" ${c.contact ? 'data-l="Contato"' : ''} style="word-break:break-word">${esc(c.contact)}</td><td class="num" data-l="Jobs">${n}</td><td class="num" data-l="Recebido">${brl(paid)}</td><td class="num ${pend ? '' : 'faint'}" data-l="Pendente">${brl(pend)}</td><td class="acts" style="text-align:right;white-space:nowrap"><button class="btn sm" data-act="job-add" data-client="${c.id}">+ Job</button>${rowBtns('client', c.id)}</td></tr>`).join('')}
+    ${rows.map(({ c, n, cs, paid, pend }) => `<tr><td class="full"><b style="font-weight:500">${esc(c.name)}</b>${c.notes ? `<div class="faint" style="font-size:12px">${esc(c.notes)}</div>` : ''}${cs.length ? `<div class="sub-tags">${cs.map(k => `<span class="tag ${k.type === 'mensal' ? 'solid' : ''}">${esc(k.title || CTYPE[k.type])} · ${cProgress(k).label}</span>`).join('')}</div>` : ''}</td><td class="muted full" ${c.contact ? 'data-l="Contato"' : ''} style="word-break:break-word">${esc(c.contact)}</td><td class="num" data-l="Jobs">${n}</td><td class="num" data-l="Recebido">${brl(paid)}</td><td class="num ${pend ? '' : 'faint'}" data-l="Pendente">${brl(pend)}</td><td class="acts" style="text-align:right;white-space:nowrap"><button class="btn sm" data-act="job-add" data-client="${c.id}">+ Job</button><button class="btn sm" data-act="contract-add" data-client="${c.id}" style="margin-left:4px">+ Plano</button>${rowBtns('client', c.id)}</td></tr>`).join('')}
   </tbody></table></div>` : empty('Cadastre seus clientes para vincular aos trabalhos.')}</div>`;
 };
 
@@ -596,6 +605,82 @@ V.jobs = () => {
     <div class="stat"><span>Jobs pendentes</span><b>${pend.length}</b></div>
   </div>
   <div class="card"><div class="list">${list.map(jobRow).join('') || empty(f === 'pendentes' ? 'Nenhum pagamento pendente.' : 'Nenhum job cadastrado.')}</div></div>`;
+};
+
+/* ---------- pacotes e planos ---------- */
+const CTYPE = { pacote:'Pacote', mensal:'Plano mensal' };
+const addMonths = (s, n) => { const d = parse(s); d.setMonth(d.getMonth() + n); return iso(d); };
+const shortMonth = m => parse(m + '-01').toLocaleDateString('pt-BR', { month:'short' }).replace('.', '');
+const cName = c => c.title || (CTYPE[c.type] + (clientName(c.clientId) ? ' · ' + clientName(c.clientId) : ''));
+const cTx = c => S.tx.filter(t => t.contractId === c.id);
+const cPaid = c => sum(cTx(c), t => t.amount);
+const cMonthPaid = (c, m) => cTx(c).some(t => t.cmonth === m);
+const cDelivered = (c, m) => (c.deliveries || []).filter(d => !m || (d.date || '').startsWith(m)).length;
+const cActive = c => !c.closed && (!c.end || c.end >= today());
+function cOpenMonths(c) {
+  if (c.type !== 'mensal' || !c.start) return [];
+  const stop = [today(), c.end, c.closed].filter(Boolean).sort()[0].slice(0, 7);
+  const out = []; let m = c.start.slice(0, 7), guard = 0;
+  while (m <= stop && guard++ < 240) { if (!cMonthPaid(c, m)) out.push(m); m = shiftMonth(m, 1); }
+  return out;
+}
+const cDue = c => c.type === 'pacote' ? Math.max(0, (+c.value || 0) - cPaid(c)) : cOpenMonths(c).length * (+c.value || 0);
+function cStatus(c) {
+  const m = today().slice(0,7), due = cDue(c), open = cOpenMonths(c);
+  if (c.type === 'pacote') return due > 0 ? `<span class="tag dash">Falta ${brl(due)}</span>` : '<span class="tag solid">Quitado</span>';
+  if (!open.length) return '<span class="tag solid">Em dia</span>';
+  if (open.length === 1 && open[0] === m) return `<span class="tag dash">${cap(shortMonth(m))} a receber</span>`;
+  return `<span class="tag">${open.length} ${open.length === 1 ? 'mês' : 'meses'} em aberto</span>`;
+}
+function cProgress(c) {
+  const isP = c.type === 'pacote', quota = +c.videos || 0;
+  const done = isP ? cDelivered(c) : cDelivered(c, today().slice(0,7));
+  return { done, quota, label: `${done}${quota ? '/' + quota : ''} vídeo${(quota || done) === 1 ? '' : 's'} ${isP ? '' : 'no mês'}`.trim() };
+}
+function contractCard(c) {
+  const m = today().slice(0,7), client = clientName(c.clientId), active = cActive(c);
+  const isP = c.type === 'pacote', { done, quota } = cProgress(c);
+  const open = cOpenMonths(c), due = cDue(c);
+  const recent = [...(c.deliveries || [])].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 3);
+  const payBtn = isP
+    ? (due > 0 ? `<button class="btn sm" data-act="contract-pay" data-id="${c.id}">Registrar pagamento</button>` : '')
+    : (open.length ? `<button class="btn sm" data-act="contract-pay" data-id="${c.id}">Receber ${shortMonth(open[0])}</button>`
+      : cMonthPaid(c, m) ? `<button class="btn sm primary" data-act="contract-unpay" data-id="${c.id}">${cap(shortMonth(m))} recebido</button>` : '');
+  const renew = !isP && c.end ? `<button class="btn sm" data-act="contract-renew" data-id="${c.id}">Renovar +1 mês</button>` : '';
+  const btns = active
+    ? `<button class="btn sm primary" data-act="delivery-add" data-id="${c.id}">+ Vídeo entregue</button>${payBtn}${renew}<button class="btn sm" data-act="contract-close" data-id="${c.id}">Encerrar</button>`
+    : `${payBtn}${renew || `<button class="btn sm" data-act="contract-reopen" data-id="${c.id}">Reativar</button>`}`;
+  const period = isP
+    ? (c.end ? `prazo ${fmtD(c.end)}` : `desde ${fmtD(c.start)}`)
+    : (c.end ? `${fmtD(c.start)} → ${fmtD(c.end)}` : `desde ${fmtD(c.start)} · renova todo mês`);
+  return `<div class="card gcard" style="${active ? '' : 'opacity:.6'}">
+    <div class="top"><div style="min-width:0"><h3>${esc(cName(c))}</h3>
+      <div class="meta"><span class="tag ${isP ? '' : 'solid'}">${CTYPE[c.type]}</span>${client && c.title ? `<span class="tag dash">${esc(client)}</span>` : ''}${active ? cStatus(c) : '<span class="tag">Encerrado</span>' + (due > 0 ? ` <span class="tag dash">Falta ${brl(due)}</span>` : '')}</div></div>
+      <button class="ib" data-act="contract-edit" data-id="${c.id}" aria-label="Editar">${I.edit}</button></div>
+    <div>
+      <div class="big">${done}${quota ? `<span class="faint">/${quota}</span>` : ''} <span style="font:500 13px var(--sans);color:var(--muted);letter-spacing:0">vídeo${(quota || done) === 1 ? '' : 's'} ${isP ? 'entregue' + ((quota || done) === 1 ? '' : 's') : 'este mês'}</span></div>
+      <div class="muted mono" style="font-size:12px;margin-top:8px">${isP ? `${brl(cPaid(c))} de ${brl(c.value)} recebido` : `${brl(c.value)}/mês${c.payDay ? ' · paga dia ' + c.payDay : ''}`}</div>
+      <div class="faint" style="font-size:12px;margin-top:2px">${period}</div>
+    </div>
+    ${quota ? bar(done / quota * 100, done > quota, true) : ''}
+    ${recent.length ? `<div class="list">${recent.map(d => `<div class="row" style="padding:6px 0"><div class="main"><div class="t" style="font-size:13px">${esc(d.title || 'Vídeo')}</div></div><span class="faint mono" style="font-size:12px">${fmtD(d.date)}</span><button class="ib" data-act="delivery-del" data-id="${c.id}" data-d="${d.id}" aria-label="Remover entrega">${I.x}</button></div>`).join('')}</div>` : ''}
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${btns}</div>
+  </div>`;
+}
+
+V.contracts = () => {
+  const f = UI.cFilter || 'ativos';
+  const list = S.contracts.filter(c => f === 'todos' || (f === 'ativos') === cActive(c))
+    .sort((a, b) => cActive(b) - cActive(a) || (b.start || '').localeCompare(a.start || ''));
+  const act = S.contracts.filter(cActive);
+  const nP = act.filter(c => c.type === 'pacote').length, nM = act.length - nP;
+  return head('Pacotes e planos', 'Pacotes com quantidade fechada de vídeos e planos mensais. Pagamentos recebidos vão para Lançamentos.', `${tabs('c-filter', f, [['ativos','Ativos'],['encerrados','Encerrados'],['todos','Todos']])}<button class="btn primary" data-act="contract-add">Novo</button>`) + `
+  <div class="stats s3">
+    <div class="stat inv"><span>A receber</span><b>${brl(sum(S.contracts, cDue))}</b></div>
+    <div class="stat"><span>Recorrente por mês</span><b>${brl(sum(act.filter(c => c.type === 'mensal'), c => c.value))}</b></div>
+    <div class="stat"><span>Ativos · ${nP} pacote${nP === 1 ? '' : 's'}, ${nM} plano${nM === 1 ? '' : 's'}</span><b>${act.length}</b></div>
+  </div>
+  ${list.length ? `<div class="grid g2">${list.map(contractCard).join('')}</div>` : `<div class="card">${empty(f === 'ativos' ? 'Cadastre um pacote (ex.: 10 Reels por R$ 3.000) ou um plano mensal (ex.: 8 vídeos por mês a R$ 2.000).' : 'Nada por aqui.')}</div>`}`;
 };
 
 V.tx = () => {
@@ -689,7 +774,7 @@ V.settings = () => head('Ajustes', 'Seus dados ficam salvos apenas neste navegad
 const NAV = [
   ['', [['overview','Visão geral']]],
   ['Pessoal', [['tasks','Tarefas'],['habits','Hábitos'],['goals','Metas'],['notes','Notas']]],
-  ['Trabalho', [['jobs','Trabalhos'],['clients','Clientes']]],
+  ['Trabalho', [['jobs','Trabalhos'],['contracts','Pacotes e planos'],['clients','Clientes']]],
   ['Finanças', [['tx','Lançamentos'],['budget','Orçamento'],['bills','Contas fixas'],['boxes','Caixinhas']]],
   ['', [['settings','Ajustes']]],
 ];
@@ -764,7 +849,38 @@ function unlinkTx(t) {
   if (t.billId) { const b = find('bills', t.billId); if (b?.paid) for (const k in b.paid) if (b.paid[k] === t.id) delete b.paid[k]; }
 }
 
+const contractFields = () => [
+  { name:'type', label:'Tipo', type:'select', options:[['pacote','Pacote de vídeos'],['mensal','Plano mensal']] },
+  { name:'clientId', label:'Cliente', type:'select', options:[['', '— sem cliente —'], ...S.clients.map(c => [c.id, c.name])] },
+  { name:'title', label:'Nome (opcional)', placeholder:'Ex.: Pacote 10 Reels' },
+  { name:'videos', label:'Quantidade de vídeos (pacote: total · plano: por mês · 0 = sem limite)', type:'number', min:0, value:0 },
+  { name:'value', label:'Valor (R$) (pacote: total · plano: mensalidade)', type:'number', step:'0.01', min:0, required:true },
+  { name:'start', label:'Início', type:'date', value:today(), required:true },
+  { name:'end', label:'Fim ou prazo (opcional; no plano, vazio = renova todo mês)', type:'date' },
+  { name:'payDay', label:'Dia do pagamento (plano mensal, opcional)', type:'number', min:1, max:31 },
+  { name:'notes', label:'Observações', type:'textarea', rows:2 },
+];
+const cClean = d => ({ ...d, videos: Math.max(0, Math.round(+d.videos || 0)), payDay: d.payDay ? Math.max(1, Math.min(31, Math.round(d.payDay))) : '' });
+
 const A = {
+  'c-filter': el => { UI.cFilter = el.dataset.v; render(); },
+  'contract-add': el => openForm({ title:'Novo pacote ou plano', fields:contractFields(), values:{ clientId: el.dataset.client || '' }, onSave: d => { S.contracts.push({ id:uid(), ...cClean(d), deliveries:[], closed:'' }); } }),
+  'contract-edit': el => { const c = find('contracts', el.dataset.id); openForm({ title:'Editar pacote/plano', fields:contractFields(), values:c, onSave: d => Object.assign(c, cClean(d)), onDelete: () => confirm(`Excluir “${cName(c)}”? Pagamentos já lançados continuam em Lançamentos.`) ? del('contracts', c.id) : false }); },
+  'contract-close': el => { const c = find('contracts', el.dataset.id); if (confirm(`Encerrar “${cName(c)}”?`)) { c.closed = today(); save('Encerrado'); } },
+  'contract-reopen': el => { const c = find('contracts', el.dataset.id); c.closed = ''; if (c.end && c.end < today()) c.end = ''; save('Reativado'); },
+  'contract-renew': el => { const c = find('contracts', el.dataset.id); const base = c.end && c.end >= today() ? c.end : today(); c.end = addMonths(base, 1); c.closed = ''; save('Renovado até ' + fmtD(c.end)); },
+  'delivery-add': el => { const c = find('contracts', el.dataset.id); openForm({ title:'Vídeo entregue', fields:[{ name:'title', label:'Vídeo (opcional)', placeholder:'Ex.: Reels 3 · bastidores' }, { name:'date', label:'Data da entrega', type:'date', value:today(), required:true }], saveLabel:'Registrar', onSave: d => { (c.deliveries = c.deliveries || []).push({ id:uid(), ...d }); } }); },
+  'delivery-del': el => { const c = find('contracts', el.dataset.id); c.deliveries = c.deliveries.filter(d => d.id !== el.dataset.d); save('Entrega removida'); },
+  'contract-pay': el => {
+    const c = find('contracts', el.dataset.id), m = c.type === 'mensal' ? cOpenMonths(c)[0] : '';
+    const client = clientName(c.clientId), desc = cName(c) + (c.title && client ? ' · ' + client : '') + (m ? ' · ' + shortMonth(m) : '');
+    openForm({ title: m ? `Mensalidade de ${monthLabel(m).toLowerCase()}` : 'Pagamento do pacote',
+      fields:[{ name:'amount', label:'Valor recebido (R$)', type:'number', step:'0.01', min:0, required:true }, { name:'date', label:'Data', type:'date', required:true }],
+      values:{ amount: m ? +c.value : cDue(c), date: today() }, saveLabel:'Lançar entrada',
+      onSave: d => { if (!(d.amount > 0)) { toast('Informe um valor'); return false; } S.tx.push({ id:uid(), type:'in', desc, amount:d.amount, category:'Edição de vídeo', date:d.date, contractId:c.id, cmonth:m, created:new Date().toISOString() }); } });
+  },
+  'contract-unpay': el => { const c = find('contracts', el.dataset.id), m = today().slice(0,7); if (!confirm('Desfazer o recebimento deste mês? A entrada será removida de Lançamentos.')) return; S.tx = S.tx.filter(t => !(t.contractId === c.id && t.cmonth === m)); save('Recebimento desfeito'); },
+
   month: el => { UI.month = shiftMonth(UI.month, +el.dataset.step); render(); },
   'task-filter': el => { UI.taskFilter = el.dataset.v; render(); },
   'job-filter': el => { UI.jobFilter = el.dataset.v; render(); },
@@ -884,4 +1000,3 @@ render();
 </script>
 </body>
 </html>
-
